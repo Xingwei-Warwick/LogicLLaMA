@@ -9,10 +9,10 @@ from functools import partial
 from peft import (
     LoraConfig,
     get_peft_model,
-    prepare_model_for_int8_training,
+    prepare_model_for_kbit_training,
     get_peft_model_state_dict
 )
-from transformers import LlamaForCausalLM, LlamaTokenizer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from utils import TranslationDataPreparer, ContinuousCorrectionDataPreparer
 import fire
 import wandb
@@ -111,14 +111,25 @@ def train(
     assert os.path.isdir(prompt_template_path), 'cannot locate the prompt template'
     assert os.path.isfile(data_path), 'cannot locate data file'
 
-    model = LlamaForCausalLM.from_pretrained(
+    tokenizer = AutoTokenizer.from_pretrained(base_model)
+    tokenizer.add_special_tokens({
+        "eos_token": "</s>",
+        "bos_token": "<s>",
+        "unk_token": '<unk>',
+        "pad_token": '<unk>',
+    })
+    tokenizer.padding_side = "left"  # Allow batched inference
+
+    model = AutoModelForCausalLM.from_pretrained(
         base_model,
         load_in_8bit=load_in_8bit,
         torch_dtype=torch.float16,
         device_map=device_map,
     )
 
-    model = prepare_model_for_int8_training(model)
+    model.resize_token_embeddings(len(tokenizer))
+
+    model = prepare_model_for_kbit_training(model)
     config = LoraConfig(
         r=lora_r,
         lora_alpha=lora_alpha,
@@ -136,15 +147,6 @@ def train(
         )
         model.load_state_dict(torch.load(saved_full_model_path))
     model.print_trainable_parameters()  # Be more transparent about the % of trainable params.
-
-    tokenizer = LlamaTokenizer.from_pretrained(base_model)
-    tokenizer.add_special_tokens({
-        "eos_token": "</s>",
-        "bos_token": "<s>",
-        "unk_token": '<unk>',
-        "pad_token": '<unk>',
-    })
-    tokenizer.padding_side = "left"  # Allow batched inference
 
     DataPreparer = TranslationDataPreparer if translation_task else ContinuousCorrectionDataPreparer
     data_keys = {
