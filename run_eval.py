@@ -1,8 +1,8 @@
 from tqdm import tqdm
 import torch
 from functools import partial
-from transformers import GenerationConfig, LlamaForCausalLM, LlamaTokenizer
-from peft import PeftModel, prepare_model_for_int8_training
+from transformers import GenerationConfig, AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel, prepare_model_for_kbit_training
 from utils import TranslationDataPreparer, ContinuousCorrectionDataPreparer, make_parent_dirs
 from generate import llama_generate
 from metrics import UniversalMetrics
@@ -34,7 +34,7 @@ def eval_llama_model(
     assert all_exists(data_path, save_path, data_keys)
     make_parent_dirs(save_path)
 
-    tokenizer = LlamaTokenizer.from_pretrained(base_model)
+    tokenizer = AutoTokenizer.from_pretrained(base_model)
     tokenizer.add_special_tokens({
         "eos_token": "</s>",
         "bos_token": "<s>",
@@ -65,13 +65,16 @@ def eval_llama_model(
         num_beams=1
     )
 
-    model = LlamaForCausalLM.from_pretrained(
+    model = AutoModelForCausalLM.from_pretrained(
         base_model,
         load_in_8bit=load_in_8bit,
         torch_dtype=torch.float16,
         device_map='auto',
     )
-    model = prepare_model_for_int8_training(model)
+
+    model.resize_token_embeddings(len(tokenizer))
+
+    model = prepare_model_for_kbit_training(model)
     if all_exists(peft_path):
         model = PeftModel.from_pretrained(
             model,
